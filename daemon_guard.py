@@ -37,7 +37,6 @@ class DaemonApp:
         self.last_detect_label = tk.Label(master, text="最近检测：无", fg="blue")
         self.last_detect_label.pack(side=tk.LEFT, padx=5)
 
-        # VM Code显示与复制
         code_frame = tk.Frame(master)
         code_frame.pack(pady=3)
         tk.Label(code_frame, text="VM Code:").pack(side=tk.LEFT, padx=3)
@@ -48,7 +47,6 @@ class DaemonApp:
         self.copy_code_btn.pack(side=tk.LEFT, padx=3)
         self.restart_count = 0
 
-        # 版权所有信息
         copyright_frame = tk.Frame(master)
         copyright_frame.pack(side=tk.BOTTOM, pady=(10,3), fill=tk.X)
         copyright_label = tk.Label(
@@ -118,7 +116,13 @@ class DaemonApp:
             messagebox.showerror("错误", "未找到要守护的exe文件！请先选择正确的目录。")
             return
         self.logfile_path = os.path.join(self.folder, LOG_FILENAME)
-        self.logfile_pos = 0
+        # 启动时文件指针移到末尾，只监控新日志，防止统计历史错误
+        if os.path.exists(self.logfile_path):
+            with open(self.logfile_path, "rb") as f:
+                f.seek(0, 2)
+                self.logfile_pos = f.tell()
+        else:
+            self.logfile_pos = 0
         self.running = True
         self.textbox.insert(tk.END, f"启动：{os.path.basename(self.current_exe)}\n")
 
@@ -142,28 +146,28 @@ class DaemonApp:
     def monitor_logfile_only(self):
         while self.running:
             time.sleep(1)
-            # 监控日志关键字
             lines = self.read_new_lines()
+            now = time.time()
             for line in lines:
                 self.textbox.insert(tk.END, line)
                 self.textbox.see(tk.END)
-                now = time.time()
                 # 检查VM Code
                 match = re.search(VM_CODE_PATTERN, line)
                 if match:
                     code = match.group(1)
                     self.vm_code_var.set(code)
+                # 只统计时间窗口内的错误
                 if KEYWORD in line:
                     self.fail_times.append(now)
-                    if RETRY_WINDOW > 0:
-                        self.fail_times = [t for t in self.fail_times if now-t <= RETRY_WINDOW]
+                    # 只保留RETRY_WINDOW秒内的
+                    self.fail_times = [t for t in self.fail_times if now-t <= RETRY_WINDOW]
                     if len(self.fail_times) >= RETRY_LIMIT:
                         now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         self.restart_count += 1
                         self.last_detect_label.config(
-                            text=f"最近检测：{now_str} | 连续{RETRY_LIMIT}次断开，重启 {self.restart_count} 次", fg="red"
+                            text=f"最近检测：{now_str} | {RETRY_WINDOW}秒内连续{RETRY_LIMIT}次断开，重启 {self.restart_count} 次", fg="red"
                         )
-                        self.textbox.insert(tk.END, f"{now_str} 连续{RETRY_LIMIT}次断开，自动重启...\n")
+                        self.textbox.insert(tk.END, f"{now_str} {RETRY_WINDOW}秒内连续{RETRY_LIMIT}次断开，自动重启...\n")
                         self.textbox.see(tk.END)
                         self.fail_times.clear()
                         self.restart_script()
@@ -204,7 +208,6 @@ class DaemonApp:
         self.start_script()
 
     def kill_all_same_name_exe(self):
-        # 强制杀死所有同名exe，避免多实例
         if not self.current_exe: return
         exe_name = os.path.basename(self.current_exe)
         for proc in psutil.process_iter(['name']):
