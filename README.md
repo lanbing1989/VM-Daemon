@@ -66,11 +66,6 @@ pyinstaller --onefile --noconsole daemon_guard.py
 
 无需手动打包 config.ini，程序会自动生成。
 
----
-
-## 界面示例
-
-![软件界面截图](doc/screenshot.png)
 
 ---
 
