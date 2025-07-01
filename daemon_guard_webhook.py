@@ -94,7 +94,6 @@ class DaemonApp:
         self.copy_code_btn.pack(side=tk.LEFT, padx=3)
         self.restart_count = 0
 
-        # 版权所有信息
         copyright_frame = tk.Frame(master)
         copyright_frame.pack(side=tk.BOTTOM, pady=(10,3), fill=tk.X)
         copyright_label = tk.Label(
@@ -235,7 +234,13 @@ class DaemonApp:
             messagebox.showerror("错误", "未找到要守护的exe文件！请先选择正确的目录。")
             return
         self.logfile_path = os.path.join(self.folder, LOG_FILENAME)
-        self.logfile_pos = 0
+        # 启动时文件指针移到末尾，只监控新日志（抛弃历史日志）
+        if os.path.exists(self.logfile_path):
+            with open(self.logfile_path, "rb") as f:
+                f.seek(0, 2)
+                self.logfile_pos = f.tell()
+        else:
+            self.logfile_pos = 0
         self.running = True
         self.textbox.insert(tk.END, f"启动：{os.path.basename(self.current_exe)}\n")
 
