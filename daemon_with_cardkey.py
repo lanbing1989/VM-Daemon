@@ -12,7 +12,7 @@ except ImportError:
 
 LANGUAGES = {
     "en": {
-        "title": "Daemon (Log Monitor + CardKey Login + Restart + VM Code + Folder Memory + Device Name + Webhook + Network Monitor)",
+        "title": "Daemon",
         "choose_folder": "Choose Folder",
         "no_folder": "No folder selected",
         "device_name": "Device Name:",
@@ -71,7 +71,7 @@ LANGUAGES = {
         "cardkey_logout": "Logout"
     },
     "zh": {
-        "title": "守护进程（卡密登录+日志监控+重启+VM Code提取+记忆文件夹+设备名+Webhook+网络监测）",
+        "title": "守护进程",
         "choose_folder": "选择文件夹",
         "no_folder": "未选择文件夹",
         "device_name": "设备名称:",
