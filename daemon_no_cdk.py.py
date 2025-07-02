@@ -113,7 +113,6 @@ LOG_FILENAME = "log.txt"
 VM_CODE_PATTERN = r"\[Info\] Your code to connect VM: ([A-Z0-9]+)"
 CONFIG_FILE = "config.ini"
 
-# 推送队列用于断网重发
 gotify_pending_queue = []
 gotify_queue_lock = threading.Lock()
 
@@ -131,11 +130,9 @@ def push_gotify(title, message, device_name=None, webhook_url=None, priority=5, 
     try:
         resp = requests.post(url, json=data, timeout=5)
         if resp.status_code != 200:
-            print(f"Gotify推送失败: {resp.text}")
             if queue_on_fail:
                 enqueue_gotify(title, message, device_name, webhook_url, priority)
-    except Exception as e:
-        print(f"Gotify推送异常: {e}")
+    except Exception:
         if queue_on_fail:
             enqueue_gotify(title, message, device_name, webhook_url, priority)
 
@@ -150,12 +147,11 @@ def enqueue_gotify(title, message, device_name, webhook_url, priority):
         })
 
 def retry_gotify_queue(lang):
-    """恢复网络后补发未推送消息。"""
     with gotify_queue_lock:
         queue = list(gotify_pending_queue)
         gotify_pending_queue.clear()
     for item in queue:
-        push_gotify(item["title"], item["message"], item["device_name"], item["webhook_url"], item["priority"], queue_on_fail=False)  # 不再二次入队
+        push_gotify(item["title"], item["message"], item["device_name"], item["webhook_url"], item["priority"], queue_on_fail=False)
     return len(queue)
 
 def get_encoding():
@@ -311,7 +307,6 @@ class DaemonApp:
         )
         self.copyright_label.pack(side=tk.BOTTOM, anchor="e", padx=10)
 
-        # 语言切换，右上角
         lang_frame = tk.Frame(master)
         lang_frame.pack(side=tk.TOP, anchor="ne", padx=5)
         tk.Label(lang_frame, text="Language/语言:").pack(side=tk.LEFT)
@@ -329,15 +324,14 @@ class DaemonApp:
         self.logfile_pos = 0
         self.last_push_vm_code = ""
         self.just_restarted = False
-        self.last_socket_status = None  # None/True/False
-
-        # 网络监测功能相关
-        self.socket_check_interval = 600  # 10分钟
+        self.last_socket_status = None
+        self.socket_check_interval = 600
         self.socket_fail_max_retry = 5
-        self.socket_fail_window = 600  # 10分钟
+        self.socket_fail_window = 600
         self.last_socket_check = 0
         self.last_network_diagnose_time = 0
-        self.NET_DIAGNOSE_INTERVAL = 600  # 10分钟
+        self.NET_DIAGNOSE_INTERVAL = 600
+        self.stopplayer_done_time = None
 
         self.load_config_folder()
         self.load_device_name()
@@ -391,14 +385,14 @@ class DaemonApp:
                 break
             time.sleep(self.socket_fail_window // self.socket_fail_max_retry)
         msg = "\n".join(messages)
-        self.textbox.after(0, lambda: self.textbox_insert(f"\n{L('net_checking', self.lang)} {msg}\n"))
+        self.textbox.after(0, lambda: self.textbox.insert(tk.END, f"\n{L('net_checking', self.lang)} {msg}\n"))
         device_name = self.get_device_name()
         webhook_url = self.webhook_var.get().strip()
         if success:
             if self.last_socket_status is not True:
                 n = retry_gotify_queue(self.lang)
                 if n > 0:
-                    self.textbox.after(0, lambda: self.textbox_insert(f"\n[{L('net_diag_push_recover', self.lang)}]: {L('gotify_queue_tip', self.lang)} ({n})\n"))
+                    self.textbox.after(0, lambda: self.textbox.insert(tk.END, f"\n[{L('net_diag_push_recover', self.lang)}]: {L('gotify_queue_tip', self.lang)} ({n})\n"))
                 if webhook_url:
                     push_gotify(L('net_diag_push_recover', self.lang), L('net_diag_push_ok', self.lang, host=host, port=port), device_name, webhook_url, 5)
             self.last_socket_status = True
@@ -407,7 +401,7 @@ class DaemonApp:
             now = time.time()
             if now - self.last_network_diagnose_time >= self.NET_DIAGNOSE_INTERVAL:
                 status, detail = diagnose_network(host, port, self.lang)
-                self.textbox.after(0, lambda: self.textbox_insert(f"\n{L('net_diag', self.lang)} {status}\n{detail}\n"))
+                self.textbox.after(0, lambda: self.textbox.insert(tk.END, f"\n{L('net_diag', self.lang)} {status}\n{detail}\n"))
                 if webhook_url:
                     push_gotify(L('net_diag_push', self.lang), f"{status}\n{detail}", device_name, webhook_url, 7)
                 self.last_network_diagnose_time = now
@@ -418,7 +412,7 @@ class DaemonApp:
     def manual_network_diagnose(self):
         host, port = self.get_server_host_port()
         status, detail = diagnose_network(host, port, self.lang)
-        self.textbox.after(0, lambda: self.textbox_insert(f"\n{L('net_diag_manual', self.lang)} {status}\n{detail}\n"))
+        self.textbox.after(0, lambda: self.textbox.insert(tk.END, f"\n{L('net_diag_manual', self.lang)} {status}\n{detail}\n"))
         webhook_url = self.webhook_var.get().strip()
         if webhook_url:
             push_gotify(L('net_diag_push_manual', self.lang), f"{status}\n{detail}", self.get_device_name(), webhook_url, 7)
@@ -426,41 +420,31 @@ class DaemonApp:
 
     def threaded_start_script(self):
         threading.Thread(target=self.start_script, daemon=True).start()
-
     def threaded_restart_script(self):
         threading.Thread(target=self.restart_script, daemon=True).start()
-
     def threaded_stop_script(self):
         threading.Thread(target=self.stop_script, daemon=True).start()
-
     def textbox_insert(self, text):
         self.textbox.insert(tk.END, text)
         self.textbox.see(tk.END)
-
-    # 新增：掉线时自动诊断
     def socket_lost_network_diag(self):
         host, port = self.get_server_host_port()
         status, detail = diagnose_network(host, port, self.lang)
-        self.textbox.after(0, lambda: self.textbox_insert(
-            f"\n[{L('net_diag_manual', self.lang)}]{status}\n{detail}\n"))
+        self.textbox.after(0, lambda: self.textbox.insert(tk.END, f"\n[{L('net_diag_manual', self.lang)}]{status}\n{detail}\n"))
         webhook_url = self.webhook_var.get().strip()
         if webhook_url:
-            push_gotify(L('net_diag_push_manual', self.lang),
-                f"{status}\n{detail}", self.get_device_name(), webhook_url, 7)
+            push_gotify(L('net_diag_push_manual', self.lang), f"{status}\n{detail}", self.get_device_name(), webhook_url, 7)
         self.last_network_diagnose_time = time.time()
-
     def set_device_name(self):
         name = self.device_name_var.get().strip()
         self.save_device_name(name)
         messagebox.showinfo(L("device_name", self.lang), L("set_device_name", self.lang, name=name if name else L("unnamed", self.lang)))
-
     def load_device_name(self):
         config = configparser.ConfigParser()
         if os.path.exists(CONFIG_FILE):
             config.read(CONFIG_FILE, encoding="utf-8")
             if "main" in config and "device_name" in config["main"]:
                 self.device_name_var.set(config["main"]["device_name"])
-
     def save_device_name(self, name):
         config = configparser.ConfigParser()
         config.read(CONFIG_FILE, encoding="utf-8")
@@ -473,25 +457,21 @@ class DaemonApp:
             config["main"]["folder"] = self.folder
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             config.write(f)
-
     def get_device_name(self, vm_code=None):
         name = self.device_name_var.get().strip()
         if name:
             return name
         return vm_code or L("unnamed", self.lang)
-
     def set_webhook_url(self):
         url = self.webhook_var.get().strip()
         self.save_webhook_url(url)
         messagebox.showinfo("Webhook", L("set_webhook", self.lang, url=url if url else L("not_filled", self.lang)))
-
     def load_webhook_url(self):
         config = configparser.ConfigParser()
         if os.path.exists(CONFIG_FILE):
             config.read(CONFIG_FILE, encoding="utf-8")
             if "main" in config and "webhook_url" in config["main"]:
                 self.webhook_var.set(config["main"]["webhook_url"])
-
     def save_webhook_url(self, url):
         config = configparser.ConfigParser()
         config.read(CONFIG_FILE, encoding="utf-8")
@@ -504,7 +484,6 @@ class DaemonApp:
             config["main"]["folder"] = self.folder
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             config.write(f)
-
     def copy_vm_code(self):
         code = self.vm_code_var.get()
         if code:
@@ -512,7 +491,6 @@ class DaemonApp:
             self.master.clipboard_append(code)
             self.master.update()
             messagebox.showinfo(L("copy", self.lang), L("copied", self.lang, code=code))
-
     def load_config_folder(self):
         config = configparser.ConfigParser()
         if os.path.exists(CONFIG_FILE):
@@ -521,7 +499,6 @@ class DaemonApp:
                 self.folder = config["main"]["folder"]
                 self.folder_label.config(text=self.folder)
                 self.textbox.insert(tk.END, L("read_folder_cfg", self.lang, folder=self.folder) + "\n")
-
     def save_config_folder(self):
         config = configparser.ConfigParser()
         config.read(CONFIG_FILE, encoding="utf-8")
@@ -534,7 +511,6 @@ class DaemonApp:
             config["main"]["webhook_url"] = self.webhook_var.get().strip()
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             config.write(f)
-
     def choose_folder(self):
         folder_selected = filedialog.askdirectory(title=L("choose_folder_title", self.lang))
         if folder_selected:
@@ -542,7 +518,6 @@ class DaemonApp:
             self.folder_label.config(text=self.folder)
             self.textbox.insert(tk.END, L("read_folder_cfg", self.lang, folder=self.folder) + "\n")
             self.save_config_folder()
-
     def find_latest_exe(self):
         if not self.folder:
             return None
@@ -550,7 +525,6 @@ class DaemonApp:
         if not files: return None
         files.sort(key=lambda x: os.path.getmtime(os.path.join(self.folder, x)), reverse=True)
         return os.path.join(self.folder, files[0])
-
     def start_script(self):
         if self.proc and self.proc.poll() is None:
             messagebox.showinfo(L("status", self.lang), L("already_running", self.lang))
@@ -572,7 +546,7 @@ class DaemonApp:
             self.proc = subprocess.Popen(
                 [self.current_exe],
                 cwd=self.folder,
-                creationflags=subprocess.CREATE_NEW_CONSOLE
+                creationflags=subprocess.CREATE_NEW_CONSOLE if platform.system() == "Windows" else 0
             )
         except Exception as e:
             self.textbox_insert(L("start_fail", self.lang, err=str(e)) + "\n")
@@ -581,19 +555,30 @@ class DaemonApp:
         self.status_label.config(text=f"{L('status', self.lang)}: {L('start', self.lang)} ({os.path.basename(self.current_exe)})")
         self.fail_times.clear()
         self.just_restarted = False
+        self.stopplayer_done_time = None
         self.monitor_thread = threading.Thread(target=self.monitor_logfile_only)
         self.monitor_thread.daemon = True
         self.monitor_thread.start()
-
     def monitor_logfile_only(self):
         pushed_start = False
         pushed_reconnect = False
         while self.running:
             time.sleep(1)
             lines = self.read_new_lines()
+            now = time.time()
+            # 新增自动重启逻辑
+            if self.stopplayer_done_time and now - self.stopplayer_done_time >= 600:
+                self.textbox.after(0, lambda: self.textbox.insert(tk.END,
+                    f"\n[WatchDog] 检测到 '[CommandDone] StopPlayer done' 后10分钟无动作，自动重启\n"))
+                self.restart_script()
+                self.stopplayer_done_time = None
+                continue
             for line in lines:
-                self.textbox.after(0, lambda l=line: self.textbox_insert(l))
-                now = time.time()
+                self.textbox.after(0, lambda l=line: self.textbox.insert(tk.END, l))
+                if self.stopplayer_done_time and '[CommandDone] StopPlayer done' not in line:
+                    self.stopplayer_done_time = None
+                if '[CommandDone] StopPlayer done' in line:
+                    self.stopplayer_done_time = time.time()
                 match = re.search(VM_CODE_PATTERN, line)
                 if match:
                     code = match.group(1)
@@ -616,7 +601,7 @@ class DaemonApp:
                         self.last_detect_label.after(0, lambda: self.last_detect_label.config(
                             text=f"{L('restart_status', self.lang, time=now_str, times=RETRY_LIMIT, count=self.restart_count)}", fg="red"
                         ))
-                        self.textbox.after(0, lambda: self.textbox_insert(f"{L('restart_alert', self.lang, time=now_str, times=RETRY_LIMIT)}\n"))
+                        self.textbox.after(0, lambda: self.textbox.insert(tk.END, f"{L('restart_alert', self.lang, time=now_str, times=RETRY_LIMIT)}\n"))
                         push_gotify("掉线自动重启", f"程序检测到掉线，已自动重启。\nVM CODE: {current_vm_code}", device_name=device_name, webhook_url=webhook_url, priority=7)
                         self.fail_times.clear()
                         self.just_restarted = True
@@ -629,13 +614,12 @@ class DaemonApp:
                 elif SUCCESS_KEYWORD in line:
                     n = retry_gotify_queue(self.lang)
                     if n > 0:
-                        self.textbox.after(0, lambda: self.textbox_insert(f"\n[{L('net_diag_push_recover', self.lang)}]: {L('gotify_queue_tip', self.lang)} ({n})\n"))
+                        self.textbox.after(0, lambda: self.textbox.insert(tk.END, f"\n[{L('net_diag_push_recover', self.lang)}]: {L('gotify_queue_tip', self.lang)} ({n})\n"))
                     self.fail_times.clear()
                     self.last_detect_label.after(0, lambda: self.last_detect_label.config(
                         text=L("reconnect_status", self.lang, time=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')), fg="green"
                     ))
         self.status_label.after(0, lambda: self.status_label.config(text=f"{L('status', self.lang)}: {L('stopped', self.lang)}"))
-
     def read_new_lines(self):
         if not self.logfile_path or not os.path.exists(self.logfile_path):
             return []
@@ -652,18 +636,15 @@ class DaemonApp:
         except Exception as e:
             lines.append(L("log_read_fail", self.lang, err=str(e)) + "\n")
         return lines
-
     def stop_script(self):
         self.running = False
         self.kill_all_same_name_exe()
         self.status_label.after(0, lambda: self.status_label.config(text=f"{L('status', self.lang)}: {L('stopped', self.lang)}"))
-        self.textbox.after(0, lambda: self.textbox_insert(L("stopped", self.lang) + "\n"))
-
+        self.textbox.after(0, lambda: self.textbox.insert(tk.END, L("stopped", self.lang) + "\n"))
     def restart_script(self):
         self.stop_script()
         time.sleep(2)
         self.start_script()
-
     def kill_all_same_name_exe(self):
         if not self.current_exe: return
         exe_name = os.path.basename(self.current_exe)
@@ -673,7 +654,6 @@ class DaemonApp:
                     proc.kill()
             except Exception:
                 pass
-
     def on_close(self):
         self.stop_script()
         self.master.destroy()
