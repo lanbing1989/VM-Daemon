@@ -267,6 +267,7 @@ class DaemonApp:
         self.last_push_vm_code = ""
         self.just_restarted = False
         self.stopplayer_done_time = None
+        self.last_log_update_time = None  # 记录日志最后更新时间，用于30分钟无新内容自动重启
 
         self.load_config_folder()
         self.load_device_name()
@@ -472,6 +473,7 @@ class DaemonApp:
             self.fail_times.clear()
             self.just_restarted = False
             self.stopplayer_done_time = None
+            self.last_log_update_time = time.time()  # 初始化日志更新时间
             self.monitor_thread = threading.Thread(target=self.monitor_logfile_only, daemon=True)
             self.monitor_thread.start()
         except Exception as e:
@@ -484,6 +486,15 @@ class DaemonApp:
             try:
                 time.sleep(1)
                 now = time.time()
+                
+                # 检查日志30分钟无新内容自动重启
+                if self.last_log_update_time and now - self.last_log_update_time >= 1800:  # 1800秒 = 30分钟
+                    self.textbox.after(0, lambda: self.textbox.insert(tk.END,
+                        "\n[WatchDog] 日志30分钟无新内容，自动重启\n"))
+                    push_gotify("日志30分钟无新内容自动重启", "日志30分钟无新内容，自动重启。", self.get_device_name(), self.webhook_var.get().strip(), 6)
+                    self.restart_script()
+                    return
+                
                 if self.stopplayer_done_time and now - self.stopplayer_done_time >= 600:
                     self.textbox.after(0, lambda: self.textbox.insert(tk.END,
                         "\n[WatchDog] 检测到 '[CommandDone] StopPlayer done' 后10分钟无动作，自动重启\n"))
@@ -492,6 +503,8 @@ class DaemonApp:
                     self.stopplayer_done_time = None
                     continue
                 lines = self.read_new_lines()
+                if lines:  # 如果有新的日志内容，更新最后日志更新时间
+                    self.last_log_update_time = now
                 for line in lines:
                     self.textbox.insert(tk.END, line)
                     self.textbox.see(tk.END)
